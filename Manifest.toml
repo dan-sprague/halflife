@@ -1421,7 +1421,7 @@ uuid = "dbe65cb8-6be2-42dd-bbc5-4196aaced4f4"
 version = "2.1.0"
 
 [[deps.MixedHalfLife]]
-deps = ["CairoMakie", "Distributions", "LaTeXStrings", "LinearAlgebra", "MCMCChains", "Optim", "Statistics", "Turing"]
+deps = ["CairoMakie", "Distributions", "LaTeXStrings", "LinearAlgebra", "MCMCChains", "NNlib", "Optim", "Statistics", "Turing"]
 path = "."
 uuid = "a2ed6a5e-96a6-440e-bd2e-f64b57a6e44e"
 version = "0.1.0"

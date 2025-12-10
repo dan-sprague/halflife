@@ -1,49 +1,148 @@
-using Turing,CairoMakie,LinearAlgebra,MCMCChains 
+using Turing, CairoMakie, LinearAlgebra, MCMCChains, Optim
 using LaTeXStrings
 
-halflives = [0.9,0.1]
-weights = [0.5,0.5]
-
-
-Exponential.(halflives)
-
-N₀ = 1.0
-
-N(θ,t;N₀ = 1.0) = N₀ * 0.5^(t / θ)
-
-
-T = 0:0.1:3
-
-
-n1 = N.(Ref(halflives[1]),T)
-n2 = N.(Ref(halflives[2]),T)
-
-acc = zeros(size(T,1))
-for component in 1:2
-    for (i,t) ∈ enumerate(T)
-        acc[i] += weights[component] * N(halflives[component],t)
+struct DecayModel{T <: Real}
+    λ::T
+    
+    function DecayModel(λ::T) where T <: Real  # Changed from DecayMixtureModel
+        @assert λ > 0 "λ must be > 0."
+        new{T}(λ)
     end
 end
 
-acc 
+struct DecayMixtureModel{T <: Real}
+    w::Vector{T}
+    λ::Vector{T}
+    
+    function DecayMixtureModel(w::Vector{T}, λ::Vector{T}) where T <: Real
+        all(w .>= 0) && sum(w) ≈ 1.0 || throw(ArgumentError("w must be non-negative and sum to 1"))
+        all(λ .>= 0) || throw(ArgumentError("λ must be non-negative"))
+        new{T}(w, λ)
+    end
+end
 
-Cat = Turing.Categorical
 
 
+
+function N(t::Real, m::DecayMixtureModel)
+    @assert t >= 0
+    expectation = 0.0
+    for (wᵢ, λᵢ) in zip(m.w, m.λ)
+        expectation += wᵢ * exp(-λᵢ * t)
+    end
+    expectation
+end
+
+function N(t::Real,m::DecayModel)
+    @assert t >=0
+
+    exp(-m.λ * t)
+end
+
+function simulate_decay(T, M::DecayMixtureModel, σ::Real)
+    @assert all(T .>= 0) "Time must be ≥ 0"
+    @assert σ >= 0 "σ must be non-negative"
+    
+    observations = similar(T, Float64)
+    for (i, t) ∈ enumerate(T)
+        observations[i] = N(t, M) * exp(σ * randn())
+    end
+    observations
+end
+
+function neg_log_likelihood(T, Y, w, λ, log_σ)
+    σ = exp(log_σ)
+    n = length(T)
+    
+    Y_pred = [sum(w[j] * exp(-λ[j] * t) for j in eachindex(w)) for t in T]
+    log_Y = log.(Y)
+    log_Y_pred = log.(Y_pred)
+    
+    nll = n / 2 * log(2 * π) + n / 2 * log(σ^2) + sum((log_Y .- log_Y_pred).^2) / (2 * σ^2)
+    return nll
+end
+
+function fit_single_decay(T, Y)
+    nvar = 2 
+    log_Y = log.(Y)
+    X = hcat(ones(length(T)), collect(T))
+    β = X \ log_Y  
+    λ_init = -β[2]
+    λ_init = max(0.01, λ_init) 
+    
+    func = TwiceDifferentiable(
+        vars -> begin
+            λ = exp(vars[1]) 
+            log_σ = vars[2]
+            neg_log_likelihood(T, Y, [1.0], [λ], log_σ)
+        end,
+        [log(λ_init), log(0.1)]; 
+        autodiff = :forward,
+    )
+    
+    opt = optimize(func, [log(λ_init), log(0.1)], BFGS(), 
+                   Optim.Options(iterations=10000, g_tol=1e-6))
+    
+    λ_fit = exp(opt.minimizer[1]) 
+    σ_fit = exp(opt.minimizer[2])
+    
+    return λ_fit, σ_fit, opt
+end
+
+true_model = DecayMixtureModel([0.5, 0.5], [1.0, 0.01])
+T = 0.0:0.2:20.0
+Y_obs = simulate_decay(T, true_model, 0.05)
+
+
+opt = fit_single_decay(T,Y_obs)
+fitted_model = DecayModel(opt[1])
+Y_pred = N.(T,Ref(fitted_model))
 fig = Figure()
-ax = Axis(fig[1,1],xlabel = "t",ylabel=L"N(t_{1/2},t)",title="Weighted Mixture of Decays")
-lines!(ax,T,n1, label = latexstring("$(halflives[1])"),linestyle=:dash)
-lines!(ax,T,n2,label = latexstring("$(halflives[2])"),linestyle=:dash)
-lines!(ax,T,acc,label = L"\sum_{i ∈ 1:3}{w_iN_i(t)}")
+ax2 = Axis(fig[1,2],
+    xlabel = L"t",
+    ylabel="",
+    width = 200,
+    height = 200)
+scatter!(ax2,T,Y_obs, label = "Simulated Data",color=:grey)
+lines!(ax2,T,Y_pred,label = "Least Squares Fit",linewidth=2.0)
 
-Legend(fig[1,2],ax,L"t_{1/2}")
+true_model2 = DecayMixtureModel([0.5, 0.5], [0.1, 0.1])
+T2 = 0.0:0.2:20.0
+Y_obs2 = simulate_decay(T2, true_model2, 0.05)
+
+opt2 = fit_single_decay(T2,Y_obs2)
+fitted_model2 = DecayModel(opt2[1])
+Y_pred2 = N.(T2,Ref(fitted_model2))
+ax3 = Axis(fig[1,1],
+    xlabel = L"t",
+    ylabel=L"N(t)",
+    width = 200,
+    height = 200)
+scatter!(ax3,T2,Y_obs2, label = "Simulated Data",color=:grey)
+lines!(ax3,T2,Y_pred2,label = "Least Squares Fit",linewidth=2.0)
+
+linkaxes!(ax2,ax3)
+Label(fig[1, 1, TopLeft()], "A)",
+    fontsize = 18,
+    font = :bold,
+    padding = (0, 5, 5, 0),
+    halign = :left)
+
+Label(fig[1, 2, TopLeft()], "B)",
+    fontsize = 18,
+    font = :bold,
+    padding = (0, 5, 5, 0),
+    halign = :left)
+
+Legend(fig[1,3],ax2,)
 
 
 # ax = Axis(fig[1,3],xlabel = "t",ylabel=L"N(t_{1/2},t)")
 # lines!(ax,T,acc,label = "Weighted Mixture")
-rowsize!(fig.layout,1,Aspect(1,1.0))
 resize_to_layout!(fig)
 fig
+
+
 
 
 using Turing, CairoMakie, LinearAlgebra, MCMCChains
