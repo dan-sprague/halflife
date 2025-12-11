@@ -1,5 +1,5 @@
 using Turing, CairoMakie, LinearAlgebra, MCMCChains, Optim
-using LaTeXStrings
+using LaTeXStrings, Printf, PrettyTables
 
 struct DecayModel{T <: Real}
     λ::T
@@ -89,58 +89,185 @@ function fit_single_decay(T, Y)
     return λ_fit, σ_fit, opt
 end
 
-true_model = DecayMixtureModel([0.5, 0.5], [1.0, 0.01])
+# Simulate 4 levels of heterogeneity
 T = 0.0:0.2:20.0
-Y_obs = simulate_decay(T, true_model, 0.05)
+colors = Makie.wong_colors()
 
+# Level 1: No heterogeneity (equal rates)
+model1 = DecayMixtureModel([0.5, 0.5], [0.5, 0.5])
+Y_obs1 = simulate_decay(T, model1, 0.1)
+opt1 = fit_single_decay(T, Y_obs1)
+fitted1 = DecayModel(opt1[1])
+Y_pred1 = N.(T, Ref(fitted1))
 
-opt = fit_single_decay(T,Y_obs)
-fitted_model = DecayModel(opt[1])
-Y_pred = N.(T,Ref(fitted_model))
+# Level 2: Low heterogeneity
+model2 = DecayMixtureModel([0.5, 0.5], [0.1, 1.0])
+Y_obs2 = simulate_decay(T, model2, 0.1)
+opt2 = fit_single_decay(T, Y_obs2)
+fitted2 = DecayModel(opt2[1])
+Y_pred2 = N.(T, Ref(fitted2))
+
+# Level 3: Medium heterogeneity
+model3 = DecayMixtureModel([0.5, 0.5], [0.01, 1.0])
+Y_obs3 = simulate_decay(T, model3, 0.1)
+opt3 = fit_single_decay(T, Y_obs3)
+fitted3 = DecayModel(opt3[1])
+Y_pred3 = N.(T, Ref(fitted3))
+
+# Create figure
 fig = Figure()
+
+# Panel A: Linear scale
+ax1 = Axis(fig[1,1],
+    xlabel = "Time (t)",
+    ylabel = "N(t)",
+    width = 200,
+    height = 200)
+
+scatter!(ax1, T, Y_obs1, color=(colors[1], 1.0), )
+lines!(ax1, T, Y_pred1, color=colors[1], linewidth=3, label="Homogenous")
+
+scatter!(ax1, T, Y_obs2, color=(colors[2], 1.0), )
+lines!(ax1, T, Y_pred2, color=colors[2], linewidth=3, label="Low heterogeneity")
+
+scatter!(ax1, T, Y_obs3, color=(colors[3], 1.0), )
+lines!(ax1, T, Y_pred3, color=colors[3], linewidth=3, label="High heterogeneity")
+
+Label(fig[1, 1, TopLeft()], "A",
+    fontsize = 18,
+    font = :bold,
+    padding = (0, 5, 5, 0),
+    halign = :left)
+
+# Panel B: Semi-log scale
 ax2 = Axis(fig[1,2],
-    xlabel = L"t",
-    ylabel="",
+    xlabel = "Time (t)",
+    ylabel = "log N(t)",
+    yscale = log10,
     width = 200,
-    height = 200)
-scatter!(ax2,T,Y_obs, label = "Simulated Data",color=:grey)
-lines!(ax2,T,Y_pred,label = "Least Squares Fit",linewidth=2.0)
+    height = 200,
+    limits = (nothing, (1e-4, 2)))  # Set y-limits to avoid log(0)
 
-true_model2 = DecayMixtureModel([0.5, 0.5], [0.1, 0.1])
-T2 = 0.0:0.2:20.0
-Y_obs2 = simulate_decay(T2, true_model2, 0.05)
+# Filter out very small values for scatter plots
+min_val = 1e-6
+scatter!(ax2, T[Y_obs1 .> min_val], Y_obs1[Y_obs1 .> min_val], color=(colors[1], 0.3), )
+lines!(ax2, T, Y_pred1, color=colors[1], linewidth=3, label="Homogenous")
 
-opt2 = fit_single_decay(T2,Y_obs2)
-fitted_model2 = DecayModel(opt2[1])
-Y_pred2 = N.(T2,Ref(fitted_model2))
-ax3 = Axis(fig[1,1],
-    xlabel = L"t",
-    ylabel=L"N(t)",
-    width = 200,
-    height = 200)
-scatter!(ax3,T2,Y_obs2, label = "Simulated Data",color=:grey)
-lines!(ax3,T2,Y_pred2,label = "Least Squares Fit",linewidth=2.0)
+scatter!(ax2, T[Y_obs2 .> min_val], Y_obs2[Y_obs2 .> min_val], color=(colors[2], 0.3), )
+lines!(ax2, T, Y_pred2, color=colors[2], linewidth=3, label="Low heterogeneity")
 
-linkaxes!(ax2,ax3)
-Label(fig[1, 1, TopLeft()], "A)",
+scatter!(ax2, T[Y_obs3 .> min_val], Y_obs3[Y_obs3 .> min_val], color=(colors[3], 0.3), )
+lines!(ax2, T, Y_pred3, color=colors[3], linewidth=3, label="High heterogeneity")
+
+
+Label(fig[1, 2, TopLeft()], "B",
     fontsize = 18,
     font = :bold,
     padding = (0, 5, 5, 0),
     halign = :left)
 
-Label(fig[1, 2, TopLeft()], "B)",
+# Panel D: Log-space residuals (linear scale)
+ax4 = Axis(fig[1,3],
+    xlabel = "Time (t)",
+    ylabel = "Log-space Residuals",
+    width = 200,
+    height = 200)
+
+# Compute log residuals: log(Y_obs) - log(Y_pred)
+log_resid1 = log.(Y_obs1) .- log.(Y_pred1)
+log_resid2 = log.(Y_obs2) .- log.(Y_pred2)
+log_resid3 = log.(Y_obs3) .- log.(Y_pred3)
+
+scatter!(ax4, T, log_resid1, color=(colors[1], 1.0))
+hlines!(ax4, [0.0], color=:black, linestyle=:dash, linewidth=3)
+
+scatter!(ax4, T, log_resid2, color=(colors[2], 1.0))
+
+scatter!(ax4, T, log_resid3, color=(colors[3], 1.0))
+
+Label(fig[2, 1, TopLeft()], "D",
     fontsize = 18,
     font = :bold,
     padding = (0, 5, 5, 0),
     halign = :left)
 
-Legend(fig[1,3],ax2,)
+Label(fig[1, 3, TopLeft()], "C",
+    fontsize = 18,
+    font = :bold,
+    padding = (0, 5, 5, 0),
+    halign = :left)
+
+# Panel E: Sign of log-space residuals
+ax5 = Axis(fig[2,1],
+    xlabel = "Time (t)",
+    ylabel = "Sign of Log Residuals",
+    width = 200,
+    height = 200,
+    yticks = ([-1, 0, 1], ["-1", "0", "+1"]))
+
+# Plot sign of residuals with offset for visibility
+scatter!(ax5, T, sign.(log_resid1) .+ 0.15, color=(colors[1], 1.0), )
+scatter!(ax5, T, sign.(log_resid2), color=(colors[2], 1.0), )
+scatter!(ax5, T, sign.(log_resid3) .- 0.15, color=(colors[3], 1.0),)
+hlines!(ax5, [0.0], color=:black, linestyle=:dash, linewidth=3)
 
 
-# ax = Axis(fig[1,3],xlabel = "t",ylabel=L"N(t_{1/2},t)")
-# lines!(ax,T,acc,label = "Weighted Mixture")
+
+# Wald-Wolfowitz Runs Test
+using HypothesisTests
+
+function runs_test_pvalue(residuals)
+    # Convert residuals to binary sequence (above/below median)
+    signs = sign.(residuals)
+    # Remove zeros
+    signs_nonzero = signs[signs .!= 0]
+    if length(signs_nonzero) < 2
+        return NaN
+    end
+    # Convert to binary: positive = 1, negative = 0
+    binary = signs_nonzero .> 0
+    test = WaldWolfowitzTest(binary)
+    return pvalue(test)
+end
+
+p1 = runs_test_pvalue(log_resid1)
+p2 = runs_test_pvalue(log_resid2)
+p3 = runs_test_pvalue(log_resid3)
+
+# Panel F: Runs test p-values table
+ax6 = Axis(fig[2,2],
+    width = 200,
+    height = 200,
+    limits = (0, 1, 0, 1))
+hidedecorations!(ax6)
+hidespines!(ax6)
+
+# Create table text with sprintf for alignment
+format_pval(p) = p < 0.001 ? "p \u226A 0.001" : @sprintf("%.3f", p)
+
+table_text = @sprintf("""
+Wald-Wolfowitz Test\nfor Homogeneity
+
+%-13s  %10s
+─────────────────
+%-13s  %10s
+%-13s  %10s
+%-13s  %10s
+""", 
+"Model", "p-value",
+"Hom.", format_pval(p1),
+"Low het.", format_pval(p2),
+"High het.", format_pval(p3))
+
+text!(ax6, 0.05, 0.5, text=table_text, align=(:left, :center), fontsize=12, space=:data)
+
+
+Legend(fig[1,4], ax1, framevisible=false)
+
 resize_to_layout!(fig)
 fig
+save("figure.png",fig)
+
 
 
 
